@@ -35,7 +35,7 @@
     </div>
     <script>
         const API_URL = "http://127.0.0.1:8000/api/v1";
-        const headers = { "Content-Type": "application/json", "X-Tenant-ID": "brand-x" };
+        const headers = { "Content-Type": "application/json", "Authorization": "Bearer mockjwt-brand-x" };
         let activeSaleId = "";
 
         async function createSale() {
