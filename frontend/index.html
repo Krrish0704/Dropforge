@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DropForge Flash Sale</title>
+    <style>
+        body { font-family: system-ui, sans-serif; max-width: 600px; margin: 2rem auto; background: #f4f4f5; }
+        .card { background: white; padding: 1.5rem; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin-bottom: 1.5rem; }
+        button { background: #000; color: #fff; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; }
+        input { padding: 8px; margin-bottom: 10px; width: 100%; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px; }
+        pre { background: #e4e4e7; padding: 10px; border-radius: 4px; overflow-x: auto; }
+    </style>
+</head>
+<body>
+    <h1>DropForge Console</h1>
+    <div class="card">
+        <h2>1. Seller: Create Flash Sale</h2>
+        <input type="text" id="productName" value="Limited Edition Hoodie">
+        <input type="number" id="stockCount" value="10">
+        <button onclick="createSale()">Initialize Sale</button>
+        <pre id="sellerOutput">Waiting...</pre>
+    </div>
+    <div class="card">
+        <h2>2. Buyer: Reserve Item</h2>
+        <input type="text" id="saleIdInput" placeholder="Sale ID">
+        <input type="email" id="buyerEmail" value="buyer1@example.com">
+        <button onclick="reserveItem()">Reserve (Click Fast!)</button>
+        <pre id="buyerOutput">Waiting...</pre>
+    </div>
+    <div class="card">
+        <h2>3. Global: Check Stock</h2>
+        <button onclick="checkStock()">Refresh Inventory</button>
+        <pre id="stockOutput">Waiting...</pre>
+    </div>
+    <script>
+        const API_URL = "http://127.0.0.1:8000/api/v1";
+        const headers = { "Content-Type": "application/json", "X-Tenant-ID": "brand-x" };
+        let activeSaleId = "";
+
+        async function createSale() {
+            const res = await fetch(`${API_URL}/seller/sales`, {
+                method: "POST", headers,
+                body: JSON.stringify({
+                    product_name: document.getElementById('productName').value,
+                    stock_count: parseInt(document.getElementById('stockCount').value),
+                    price_cents: 5000
+                })
+            });
+            const data = await res.json();
+            activeSaleId = data.sale_id;
+            document.getElementById('saleIdInput').value = activeSaleId;
+            document.getElementById('sellerOutput').innerText = JSON.stringify(data, null, 2);
+        }
+
+        async function reserveItem() {
+            const saleId = document.getElementById('saleIdInput').value;
+            const res = await fetch(`${API_URL}/buyer/reserve`, {
+                method: "POST", headers,
+                body: JSON.stringify({ sale_id: saleId, buyer_email: document.getElementById('buyerEmail').value })
+            });
+            const data = await res.json();
+            document.getElementById('buyerOutput').innerText = res.ok ? JSON.stringify(data, null, 2) : `ERROR ${res.status}: ${data.detail}`;
+            checkStock();
+        }
+
+        async function checkStock() {
+            const saleId = document.getElementById('saleIdInput').value || activeSaleId;
+            const res = await fetch(`${API_URL}/seller/sales/${saleId}/status`, { headers });
+            document.getElementById('stockOutput').innerText = JSON.stringify(await res.json(), null, 2);
+        }
+    </script>
+</body>
+</html>
