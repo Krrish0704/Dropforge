@@ -1,23 +1,36 @@
 import uuid
-import asyncio
-from fastapi import APIRouter, Header, HTTPException, BackgroundTasks
+import json
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel
 from src.core.redis import redis_client
 
 router = APIRouter()
 
+# --- AMAZON COGNITO SIMULATION ---
+def get_current_tenant(authorization: str = Header(default="Bearer mockjwt-brand-x")):
+    """
+    Simulates extracting the tenant_id from a Cognito JWT claim.
+    In production, this decodes and verifies the JWT signature.
+    """
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing or invalid token")
+    
+    token = authorization.split(" ")[1]
+    
+    # Mock decoding: 'mockjwt-brand-x' yields 'brand-x'
+    if token.startswith("mockjwt-"):
+        return token.split("mockjwt-")[1]
+    
+    raise HTTPException(status_code=403, detail="Unauthorized tenant access")
+
+# --- LUA SCRIPTS ---
 RATE_LIMIT_LUA = """
 local current = redis.call('incr', KEYS[1])
-if current == 1 then
-    redis.call('expire', KEYS[1], ARGV[1])
-end
-if current > tonumber(ARGV[2]) then
-    return 0 -- Rate limit exceeded
-end
-return 1 -- Allowed
+if current == 1 then redis.call('expire', KEYS[1], ARGV[1]) end
+if current > tonumber(ARGV[2]) then return 0 end
+return 1
 """
 
-# 2. Atomic Reservation (Existing)
 RESERVE_LUA_SCRIPT = """
 local stock = tonumber(redis.call('get', KEYS[1]))
 if stock == nil then return -1 end
@@ -38,55 +51,51 @@ class ReserveRequest(BaseModel):
     sale_id: str
     buyer_email: str
 
-# --- ASYNC WORKER SIMULATION (Simulates SQS + Celery) ---
-async def process_payment_worker(tenant_id: str, sale_id: str, email: str, res_id: str):
-    """Simulates picking up a message from SQS, processing payment, and writing to Aurora PostgreSQL."""
-    print(f"[{res_id}] ⏳ WORKER: Processing payment for {email}...")
-    await asyncio.sleep(2)  # Simulate slow payment gateway network call
-    print(f"[{res_id}] ✅ WORKER: Payment cleared. Order saved to DB for Tenant: {tenant_id}")
-
 @router.post("/seller/sales")
-async def create_sale(payload: CreateSaleRequest, x_tenant_id: str = Header(default="tenant-alpha", alias="X-Tenant-ID")):
+async def create_sale(payload: CreateSaleRequest, tenant_id: str = Depends(get_current_tenant)):
     sale_id = str(uuid.uuid4())[:8]
-    inventory_key = f"inventory:{x_tenant_id}:{sale_id}"
+    
+    # Strict Namespace Isolation
+    inventory_key = f"inventory:{tenant_id}:{sale_id}"
+    meta_key = f"sale_meta:{tenant_id}:{sale_id}"
     
     await redis_client.set(inventory_key, payload.stock_count)
-    await redis_client.hset(
-        f"sale_meta:{x_tenant_id}:{sale_id}",
-        mapping={"sale_id": sale_id, "stock": payload.stock_count}
-    )
-    return {"status": "created", "sale_id": sale_id, "stock_count": payload.stock_count}
+    await redis_client.hset(meta_key, mapping={"sale_id": sale_id, "stock": payload.stock_count, "tenant": tenant_id})
+    return {"status": "created", "sale_id": sale_id, "tenant_id": tenant_id, "stock_count": payload.stock_count}
 
 @router.post("/buyer/reserve")
-async def reserve_item(
-    payload: ReserveRequest, 
-    background_tasks: BackgroundTasks,
-    x_tenant_id: str = Header(default="tenant-alpha", alias="X-Tenant-ID")
-):
-    # 1. Rate Limiting Check (Max 5 requests per second per Email)
-    rate_key = f"ratelimit:{payload.buyer_email}"
-    is_allowed = await redis_client.eval(RATE_LIMIT_LUA, 1, rate_key, 1, 5)
-    if is_allowed == 0:
-        raise HTTPException(status_code=429, detail="Too many requests. Bot behavior detected.")
+async def reserve_item(payload: ReserveRequest, tenant_id: str = Depends(get_current_tenant)):
+    # 1. Anti-Bot Rate Limiting (Per-tenant, per-email)
+    rate_key = f"ratelimit:{tenant_id}:{payload.buyer_email}"
+    if await redis_client.eval(RATE_LIMIT_LUA, 1, rate_key, 1, 5) == 0:
+        raise HTTPException(status_code=429, detail="Bot behavior detected.")
 
-    # 2. Atomic Inventory Check
-    inventory_key = f"inventory:{x_tenant_id}:{payload.sale_id}"
+    # 2. Atomic Reservation (Isolated to tenant namespace)
+    inventory_key = f"inventory:{tenant_id}:{payload.sale_id}"
     result = await redis_client.eval(RESERVE_LUA_SCRIPT, 1, inventory_key)
 
     if result == 1:
         reservation_id = str(uuid.uuid4())[:8]
-        # 3. Hand off to Async Worker (Decoupling)
-        background_tasks.add_task(process_payment_worker, x_tenant_id, payload.sale_id, payload.buyer_email, reservation_id)
         
-        return {"status": "reserved", "reservation_id": reservation_id, "message": "Payment processing in background"}
+        # 3. Queue for Async Processing
+        task_payload = {
+            "tenant_id": tenant_id,
+            "sale_id": payload.sale_id,
+            "buyer_email": payload.buyer_email,
+            "reservation_id": reservation_id
+        }
+        await redis_client.lpush("dropforge:sqs_queue", json.dumps(task_payload))
+        return {"status": "reserved", "reservation_id": reservation_id}
     elif result == 0:
         raise HTTPException(status_code=410, detail="Sold out")
     else:
-        raise HTTPException(status_code=404, detail="Sale not found")
+        # Prevents leaking whether a sale_id exists for a DIFFERENT tenant
+        raise HTTPException(status_code=404, detail="Sale not found or does not belong to this tenant")
 
 @router.get("/seller/sales/{sale_id}/status")
-async def get_sale_status(sale_id: str, x_tenant_id: str = Header(default="tenant-alpha", alias="X-Tenant-ID")):
-    stock = await redis_client.get(f"inventory:{x_tenant_id}:{sale_id}")
+async def get_sale_status(sale_id: str, tenant_id: str = Depends(get_current_tenant)):
+    # Tenant B cannot query Tenant A's sale_id, even if they guess it.
+    stock = await redis_client.get(f"inventory:{tenant_id}:{sale_id}")
     if stock is None:
-        raise HTTPException(status_code=404, detail="Sale not found")
-    return {"remaining_stock": int(stock)}
+        raise HTTPException(status_code=404, detail="Access denied or sale not found")
+    return {"tenant_id": tenant_id, "remaining_stock": int(stock)}
