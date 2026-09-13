@@ -7,6 +7,7 @@ from src.core.redis import redis_client
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 from src.core.db import get_db, set_tenant_context
+from src.worker.tasks import dispatch_payment_task
 
 router = APIRouter()
 
@@ -116,14 +117,15 @@ async def join_queue(sale_id: str, buyer_email: str, tenant_id: str = Depends(ge
 
 @router.post("/buyer/reserve")
 async def reserve_item(payload: ReserveRequest, tenant_id: str = Depends(get_current_tenant)):
+    # 1. Anti-Bot Rate Limiting (Per-tenant, per-email)
     rate_key = f"ratelimit:{tenant_id}:{payload.buyer_email}"
     if await redis_client.eval(RATE_LIMIT_LUA, 1, rate_key, 1, 5) == 0:
         raise HTTPException(status_code=429, detail="Bot behavior detected.")
 
+    # 2. Variable Quantity Reservation with Turn Checking
     inventory_key = f"inventory:{tenant_id}:{payload.sale_id}"
     turn_key = f"turn:{tenant_id}:{payload.sale_id}"
     
-    # Pass 2 keys and 2 arguments to the new Lua script
     result = await redis_client.eval(
         VARIABLE_RESERVE_LUA, 
         2, 
@@ -136,6 +138,7 @@ async def reserve_item(payload: ReserveRequest, tenant_id: str = Depends(get_cur
     if result == 1:
         reservation_id = str(uuid.uuid4())[:8]
         
+        # 3. Queue for Async Processing via Semaphore Dispatcher
         task_payload = {
             "tenant_id": tenant_id,
             "sale_id": payload.sale_id,
@@ -144,14 +147,18 @@ async def reserve_item(payload: ReserveRequest, tenant_id: str = Depends(get_cur
             "quantity": payload.requested_quantity
         }
         
-        # This will be replaced by the Semaphore dispatch function (Number 4)
-        await redis_client.lpush("dropforge:sqs_queue", json.dumps(task_payload))
+        # Replaces the old redis_client.lpush simulation
+        dispatch_payment_task(tenant_id, task_payload)
         
-        return {"status": "reserved", "reservation_id": reservation_id, "quantity": payload.requested_quantity}
+        return {
+            "status": "reserved", 
+            "reservation_id": reservation_id, 
+            "quantity": payload.requested_quantity
+        }
     elif result == -2:
-        raise HTTPException(status_code=403, detail="Not your turn or turn has expired")
+        raise HTTPException(status_code=403, detail="Not your turn or turn has expired.")
     elif result == 0:
-        raise HTTPException(status_code=410, detail="Not enough stock for the requested quantity")
+        raise HTTPException(status_code=410, detail="Not enough stock for the requested quantity.")
     else:
         raise HTTPException(status_code=404, detail="Sale not found or does not belong to this tenant")
 

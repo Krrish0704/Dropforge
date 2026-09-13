@@ -3,12 +3,13 @@ import time
 import random
 import redis
 from celery import shared_task
+from celery.exceptions import Retry, MaxRetriesExceededError
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 from src.worker.celery_app import celery_app
 
-
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
+# --- SYNCHRONOUS CONNECTIONS FOR CELERY ---
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:password@localhost:5432/dropforge")
 SYNC_DB_URL = DATABASE_URL.replace("+asyncpg", "")
 
@@ -16,10 +17,9 @@ sync_engine = create_engine(SYNC_DB_URL)
 SyncSessionLocal = sessionmaker(bind=sync_engine)
 sync_redis = redis.from_url(REDIS_URL, decode_responses=True)
 
-# --- CONFIGURATION & SCRIPTS ---
 MAX_INFLIGHT_PER_TENANT = 50
 
-# Restores the exact variable quantity back to inventory if payment fails
+# Restores the exact variable quantity back to inventory if payment fails[cite: 2]
 ROLLBACK_LUA = """
 -- KEYS[1] = inventory:{tenant_id}:{sale_id}
 -- ARGV[1] = requested_quantity to restore
@@ -27,29 +27,34 @@ redis.call('incrby', KEYS[1], tonumber(ARGV[1]))
 return 1
 """
 
+# --- CUSTOM EXCEPTIONS FOR ROUTING ---
+class TransientGatewayError(Exception):
+    """Temporary gateway connection drops requiring short automated retries."""
+    pass
+
+class ActionRequiredError(Exception):
+    """Failures requiring human intervention (e.g., 3D Secure, OTP) with a 120s hold."""
+    pass
+
 # --- 1. CELERY BEAT: DISTRIBUTED QUEUE REAPER ---
 @shared_task(name="advance_expired_turns")
 def advance_expired_turns(tenant_id: str, sale_id: str):
     """
-    Runs every 2 seconds via Celery Beat.
-    If the active turn has expired (or doesn't exist), pop the next user from the ZSET queue.
+    Runs every 2 seconds via Celery Beat[cite: 2].
+    If the active turn has expired (or doesn't exist), pop the next user from the ZSET queue[cite: 2].
     """
     turn_key = f"turn:{tenant_id}:{sale_id}"
     queue_key = f"queue:{tenant_id}:{sale_id}"
     
-    # Check if a turn is currently active
     current_turn = sync_redis.get(turn_key)
     if current_turn:
-        return  # Still waiting for the current buyer to act
+        return 
         
-    # Pop the lowest-score (oldest) user from the ZSET
     next_user = sync_redis.zpopmin(queue_key, 1)
     if not next_user:
-        return  # Queue is empty
+        return 
         
     buyer_email = next_user[0][0]
-    
-    # Set the turn with a 90-second distributed TTL
     sync_redis.setex(turn_key, 90, buyer_email)
     print(f"Turn advanced for {sale_id}. {buyer_email} now has 90s to choose quantity.")
 
@@ -57,57 +62,54 @@ def advance_expired_turns(tenant_id: str, sale_id: str):
 def dispatch_payment_task(tenant_id: str, payload: dict):
     """
     Enforces a maximum inflight limit so one massive flash sale 
-    cannot consume 100% of the shared worker pool.
+    cannot consume 100% of the shared worker pool[cite: 2].
     """
     inflight_key = f"inflight:{tenant_id}"
-    
     current = sync_redis.incr(inflight_key)
     
     if current > MAX_INFLIGHT_PER_TENANT:
-        # Roll back the increment and retry later via the default queue
         sync_redis.decr(inflight_key)
         process_payment.apply_async(args=[payload], countdown=2, queue="default")
         return
         
-    # Dispatch normally if under the limit
     process_payment.apply_async(args=[payload], queue="default")
 
-# --- 3. EXECUTION TASK: DURABILITY & ROLLBACK ---
+# --- 3. EXECUTION TASK: DURABILITY & PRIORITY RETRIES ---
 @celery_app.task(bind=True, name="process_payment")
 def process_payment(self, payload: dict):
-    """
-    Handles payment simulation, writes to PostgreSQL with RLS, 
-    and reliably decrements the inflight semaphore.
-    """
     tenant_id = payload["tenant_id"]
     sale_id = payload["sale_id"]
     email = payload["buyer_email"]
     res_id = payload["reservation_id"]
     quantity = payload.get("quantity", 1)
+    inventory_key = f"inventory:{tenant_id}:{sale_id}"
     
+    is_retrying = False
+
     try:
-        print(f"[{res_id}] ⏳ CELERY: Processing payment for {email} (Qty: {quantity})...")
-        time.sleep(1.5)  # Simulate payment gateway latency
+        print(f"[{res_id}] ⏳ Processing payment for {email} (Qty: {quantity}, Attempt: {self.request.retries + 1})...")
+        time.sleep(1.2)  
 
-        # Simulate 15% failed payment / abandoned checkout
-        payment_successful = random.random() >= 0.15
-
-        if not payment_successful:
-            print(f"[{res_id}] ❌ PAYMENT FAILED: Rolling back {quantity} units for sale {sale_id}")
-            inventory_key = f"inventory:{tenant_id}:{sale_id}"
+        roll = random.random()
+        # Simulate 5% transient network timeout
+        if roll < 0.05:
+            raise TransientGatewayError("Gateway socket timeout")
+        # Simulate 5% OTP/3D Secure action required
+        elif roll < 0.10:
+            raise ActionRequiredError("3D Secure challenge required")
+        # Simulate 5% hard terminal failure (fraud, invalid card)
+        elif roll < 0.15:
+            print(f"[{res_id}] ❌ TERMINAL FAILURE: Rolling back {quantity} units.")
             sync_redis.eval(ROLLBACK_LUA, 1, inventory_key, quantity)
             return {"status": "failed", "reservation_id": res_id}
 
-        # Persist finalized order to PostgreSQL with RLS context
+        # Persist finalized order to PostgreSQL with RLS context[cite: 2]
         with SyncSessionLocal() as session:
-            # Enforce Row-Level Security for this specific transaction
             session.execute(text("SET LOCAL app.current_tenant = :tenant"), {"tenant": tenant_id})
-            
-            insert_query = text("""
+            session.execute(text("""
                 INSERT INTO orders (tenant_id, sale_id, buyer_email, reservation_id, status)
                 VALUES (:tenant_id, :sale_id, :buyer_email, :reservation_id, 'completed')
-            """)
-            session.execute(insert_query, {
+            """), {
                 "tenant_id": tenant_id,
                 "sale_id": sale_id,
                 "buyer_email": email,
@@ -115,13 +117,39 @@ def process_payment(self, payload: dict):
             })
             session.commit()
 
-        print(f"[{res_id}] ✅ ORDER DURABLY PERSISTED: Tenant {tenant_id}")
+        print(f"[{res_id}] ✅ ORDER PERSISTED: Tenant {tenant_id}")
         return {"status": "completed", "reservation_id": res_id}
-        
+
+    except TransientGatewayError:
+        is_retrying = True
+        backoff = min(5 * (2 ** self.request.retries), 30)
+        print(f"[{res_id}] ⚠️ GATEWAY BLIP: Escalating to 'priority' queue in {backoff}s...")
+        raise self.retry(queue="priority", countdown=backoff, max_retries=3)
+
+    except ActionRequiredError:
+        is_retrying = True
+        # Set a 120s hold in Redis for the user to complete their action
+        hold_key = f"payment_hold:{tenant_id}:{res_id}"
+        sync_redis.setex(hold_key, 120, "awaiting_user_action")
+        print(f"[{res_id}] 🛑 ACTION REQUIRED: Holding inventory for 120s. Pushing to priority fallback.")
+        # Queue it slightly past the 120s mark. If the user hasn't intervened, this fallback attempt rolls it back.
+        raise self.retry(queue="priority", countdown=125, max_retries=1)
+
+    except Retry:
+        is_retrying = True
+        raise 
+
+    except MaxRetriesExceededError:
+        print(f"[{res_id}] 🚨 HOLD EXPIRED / MAX RETRIES: Rolling back {quantity} units.")
+        sync_redis.eval(ROLLBACK_LUA, 1, inventory_key, quantity)
+        return {"status": "failed_after_retries", "reservation_id": res_id}
+
     except Exception as e:
-        print(f"[{res_id}] ⚠️ ERROR: {str(e)}")
+        print(f"[{res_id}] ⚠️ UNHANDLED ERROR: {str(e)}")
+        sync_redis.eval(ROLLBACK_LUA, 1, inventory_key, quantity)
         raise e
+
     finally:
-        # Crucial: Always decrement the semaphore even if the database fails,
-        # otherwise worker capacity leaks and gets permanently blocked.
-        sync_redis.decr(f"inflight:{tenant_id}")
+        # Prevents negative semaphore drift during retries
+        if not is_retrying:
+            sync_redis.decr(f"inflight:{tenant_id}")

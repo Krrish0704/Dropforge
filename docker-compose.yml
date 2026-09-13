@@ -34,3 +34,33 @@ services:
     ports:
       - "3000:3000"
     command: python -m http.server 3000
+
+  worker-default:
+    build: ./backend
+    # Subscribed ONLY to 'default'. Handles bulk standard processing.
+    command: celery -A src.worker.celery_app worker -Q default --concurrency=8 --loglevel=info
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql+asyncpg://postgres:password@db:5432/dropforge
+    depends_on:
+      - redis
+      - db
+
+  worker-priority:
+    build: ./backend
+    # Subscribed ONLY to 'priority'. Dedicated capacity for network retries.
+    command: celery -A src.worker.celery_app worker -Q priority --concurrency=2 --loglevel=info
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql+asyncpg://postgres:password@db:5432/dropforge
+    depends_on:
+      - redis
+      - db
+
+  beat:
+    build: ./backend
+    command: celery -A src.worker.celery_app beat --loglevel=info
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - redis
