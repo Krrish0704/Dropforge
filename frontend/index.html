@@ -1,74 +1,349 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>DropForge Flash Sale</title>
-    <style>
-        body { font-family: system-ui, sans-serif; max-width: 600px; margin: 2rem auto; background: #f4f4f5; }
-        .card { background: white; padding: 1.5rem; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin-bottom: 1.5rem; }
-        button { background: #000; color: #fff; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; }
-        input { padding: 8px; margin-bottom: 10px; width: 100%; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px; }
-        pre { background: #e4e4e7; padding: 10px; border-radius: 4px; overflow-x: auto; }
-    </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DropForge | Live Drops</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700;900&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'Space Grotesk', sans-serif; background-color: #FDFBF7; }
+    .brutal-box { 
+      border: 3px solid #000; 
+      box-shadow: 6px 6px 0px #000; 
+      transition: all 0.1s ease;
+    }
+    .brutal-box-sm { 
+      border: 2px solid #000; 
+      box-shadow: 3px 3px 0px #000; 
+    }
+    .brutal-btn:active {
+      transform: translate(4px, 4px);
+      box-shadow: 2px 2px 0px #000;
+    }
+    .brutal-input {
+      border: 3px solid #000;
+      box-shadow: 3px 3px 0px #000;
+    }
+    .brutal-input:focus {
+      outline: none;
+      box-shadow: 5px 5px 0px #CCFF00;
+    }
+  </style>
 </head>
-<body>
-    <h1>DropForge Console</h1>
-    <div class="card">
-        <h2>1. Seller: Create Flash Sale</h2>
-        <input type="text" id="productName" value="Limited Edition Hoodie">
-        <input type="number" id="stockCount" value="10">
-        <button onclick="createSale()">Initialize Sale</button>
-        <pre id="sellerOutput">Waiting...</pre>
-    </div>
-    <div class="card">
-        <h2>2. Buyer: Reserve Item</h2>
-        <input type="text" id="saleIdInput" placeholder="Sale ID">
-        <input type="email" id="buyerEmail" value="buyer1@example.com">
-        <button onclick="reserveItem()">Reserve (Click Fast!)</button>
-        <pre id="buyerOutput">Waiting...</pre>
-    </div>
-    <div class="card">
-        <h2>3. Global: Check Stock</h2>
-        <button onclick="checkStock()">Refresh Inventory</button>
-        <pre id="stockOutput">Waiting...</pre>
-    </div>
-    <script>
-        const API_URL = "http://127.0.0.1:8000/api/v1";
-        const headers = { "Content-Type": "application/json", "Authorization": "Bearer mockjwt-brand-x" };
-        let activeSaleId = "";
+<body class="min-h-screen text-black antialiased p-6">
 
-        async function createSale() {
-            const res = await fetch(`${API_URL}/seller/sales`, {
-                method: "POST", headers,
-                body: JSON.stringify({
-                    product_name: document.getElementById('productName').value,
-                    stock_count: parseInt(document.getElementById('stockCount').value),
-                    price_cents: 5000
-                })
-            });
-            const data = await res.json();
-            activeSaleId = data.sale_id;
-            document.getElementById('saleIdInput').value = activeSaleId;
-            document.getElementById('sellerOutput').innerText = JSON.stringify(data, null, 2);
-        }
+  <!-- Navigation -->
+  <nav class="max-w-5xl mx-auto mb-10 flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <div class="h-12 w-12 bg-[#CCFF00] brutal-box flex items-center justify-center font-black text-2xl">⚡</div>
+      <span class="text-3xl font-black tracking-tighter uppercase">DropForge</span>
+    </div>
+    
+    <div class="flex gap-4">
+      <button onclick="switchTab('buyer')" id="tabBuyer" class="brutal-box brutal-btn bg-[#A5F3FC] px-6 py-2.5 font-bold text-sm uppercase tracking-wide">Public Shop</button>
+      <button onclick="switchTab('owner')" id="tabOwner" class="brutal-box brutal-btn bg-white px-6 py-2.5 font-bold text-sm uppercase tracking-wide">Owner Portal</button>
+    </div>
+  </nav>
 
-        async function reserveItem() {
-            const saleId = document.getElementById('saleIdInput').value;
-            const res = await fetch(`${API_URL}/buyer/reserve`, {
-                method: "POST", headers,
-                body: JSON.stringify({ sale_id: saleId, buyer_email: document.getElementById('buyerEmail').value })
-            });
-            const data = await res.json();
-            document.getElementById('buyerOutput').innerText = res.ok ? JSON.stringify(data, null, 2) : `ERROR ${res.status}: ${data.detail}`;
-            checkStock();
-        }
+  <main class="max-w-5xl mx-auto">
+    
+    <!-- ========================================== -->
+    <!-- PUBLIC STOREFRONT (Buyers)                 -->
+    <!-- ========================================== -->
+    <div id="viewBuyer" class="space-y-8">
+      
+      <!-- Step 1: Join Queue -->
+      <div id="buyerStepJoin" class="grid md:grid-cols-2 gap-8">
+        <div class="bg-white brutal-box p-8 flex flex-col">
+          <div class="bg-[#DDD6FE] border-b-3 border-black -mx-8 -mt-8 p-4 mb-6 flex justify-between items-center brutal-box shadow-none border-t-0 border-l-0 border-r-0">
+            <span class="font-bold uppercase text-xs tracking-widest">Live Now</span>
+            <span class="bg-white px-2 py-1 border-2 border-black text-xs font-bold brutal-box-sm">Strict Limits Apply</span>
+          </div>
+          <h2 class="text-4xl font-black uppercase leading-tight mb-2">Secure Your Spot</h2>
+          <p class="text-gray-600 font-semibold mb-8">Enter the Sale ID and your email to get in line.</p>
+          
+          <div class="mt-auto space-y-4">
+            <div>
+              <label class="block font-bold uppercase text-xs mb-1">Sale ID</label>
+              <input id="userSaleId" type="text" placeholder="Paste Sale ID..." class="w-full brutal-input bg-white px-4 py-3 font-bold">
+            </div>
+            <div>
+              <label class="block font-bold uppercase text-xs mb-1">Your Email</label>
+              <input id="userEmail" type="email" value="shopper@example.com" class="w-full brutal-input bg-white px-4 py-3 font-bold">
+            </div>
+            <button onclick="userJoinQueue()" class="w-full bg-[#CCFF00] brutal-box brutal-btn py-4 font-black uppercase tracking-widest text-lg hover:bg-yellow-300 mt-2">
+              Get In Line
+            </button>
+          </div>
+        </div>
+      </div>
 
-        async function checkStock() {
-            const saleId = document.getElementById('saleIdInput').value || activeSaleId;
-            const res = await fetch(`${API_URL}/seller/sales/${saleId}/status`, { headers });
-            document.getElementById('stockOutput').innerText = JSON.stringify(await res.json(), null, 2);
+      <!-- Step 2: Queue / Waiting Room -->
+      <div id="buyerStepWaiting" class="hidden bg-[#A5F3FC] brutal-box p-10 max-w-2xl mx-auto text-center">
+        <h3 class="text-2xl font-black uppercase mb-4">You are in the queue</h3>
+        <div class="bg-white brutal-box p-6 inline-block mb-6">
+          <p class="text-sm font-bold uppercase mb-2">Estimated Position</p>
+          <p id="displayRank" class="text-6xl font-black">--</p>
+        </div>
+        <p class="font-semibold text-sm">Do not refresh. Polling system active...</p>
+      </div>
+
+      <!-- Step 3: Checkout (Turn Active) -->
+      <div id="buyerStepCheckout" class="hidden bg-[#6EE7B7] brutal-box p-10 max-w-2xl mx-auto text-center relative overflow-hidden">
+        <div class="bg-white brutal-box px-6 py-2 inline-block mb-6 transform -rotate-2">
+          <h3 class="text-xl font-black uppercase">Your Turn Is Active!</h3>
+        </div>
+        
+        <div class="mb-6">
+          <p class="font-bold text-sm uppercase">Time Remaining</p>
+          <p id="turnTimer" class="text-5xl font-black font-mono">90s</p>
+        </div>
+
+        <div class="max-w-xs mx-auto mb-6 text-left">
+          <label class="block font-bold uppercase text-xs mb-1">Quantity</label>
+          <input id="userQty" type="number" min="1" max="5" value="1" class="w-full brutal-input bg-white px-4 py-3 font-bold text-center text-xl">
+        </div>
+
+        <button onclick="userCheckout()" class="w-full bg-white brutal-box brutal-btn py-4 font-black uppercase tracking-widest text-lg hover:bg-gray-100">
+          Complete Secure Payment
+        </button>
+      </div>
+
+      <div id="userResponseBox" class="hidden bg-white brutal-box p-6 text-center font-bold text-lg mt-6 max-w-2xl mx-auto"></div>
+    </div>
+
+    <!-- ========================================== -->
+    <!-- OWNER PORTAL (Hidden from public)          -->
+    <!-- ========================================== -->
+    <div id="viewOwner" class="hidden space-y-8">
+      <!-- Top controls -->
+      <div class="bg-white brutal-box px-6 py-4 flex items-center justify-between">
+        <div class="font-bold uppercase tracking-widest text-sm flex items-center gap-2">
+          <span class="w-3 h-3 bg-[#6EE7B7] rounded-full inline-block border border-black"></span> 
+          Active Tenant Auth
+        </div>
+        <input id="adminTenant" type="text" value="brand-x" class="brutal-box-sm px-3 py-1 text-sm font-bold bg-gray-100 outline-none">
+      </div>
+
+      <div class="grid md:grid-cols-2 gap-8">
+        <!-- Drop Creator -->
+        <div class="bg-[#FFEDD5] brutal-box p-8">
+          <h2 class="text-2xl font-black uppercase mb-6 border-b-4 border-black pb-4">Drop a New Product</h2>
+          <div class="space-y-6">
+            <div>
+              <label class="block font-bold uppercase text-sm mb-2">Product Name</label>
+              <input id="adminProduct" type="text" value="VIP Backstage Pass" class="w-full brutal-input bg-white px-4 py-3 font-bold">
+            </div>
+            <div>
+              <label class="block font-bold uppercase text-sm mb-2">Quantity Available</label>
+              <input id="adminStock" type="number" value="10" class="w-full brutal-input bg-white px-4 py-3 font-bold text-xl">
+            </div>
+            <button onclick="adminCreateSale()" class="w-full bg-[#CCFF00] brutal-box brutal-btn py-4 font-black uppercase tracking-widest text-lg mt-4">
+              Make Drop Live
+            </button>
+          </div>
+          
+          <div id="adminCreatedResult" class="hidden mt-6 bg-white brutal-box-sm p-4">
+            <span class="text-xs font-bold uppercase block mb-1">Generated Sale ID (Copy this):</span>
+            <span id="adminSaleIdSpan" class="text-lg font-black break-all select-all text-blue-700"></span>
+          </div>
+        </div>
+
+        <!-- Owner Stats -->
+        <div class="bg-white brutal-box p-8 flex flex-col">
+          <h2 class="text-2xl font-black uppercase mb-6 border-b-4 border-black pb-4">Live Inventory Stats</h2>
+          
+          <div class="mb-6 flex gap-2">
+            <input id="monitorSaleId" type="text" placeholder="Paste Sale ID to monitor..." class="flex-1 brutal-input bg-white px-4 py-2 font-bold text-sm">
+            <button onclick="fetchStockStatus()" class="bg-[#CCFF00] brutal-box brutal-btn px-4 py-2 font-bold text-sm uppercase">Sync</button>
+          </div>
+
+          <div class="bg-black text-white brutal-box p-6 flex flex-col justify-center items-center shadow-[6px_6px_0px_#CCFF00] flex-1">
+            <span class="font-bold uppercase text-sm tracking-widest text-gray-300 mb-2">Units Remaining</span>
+            <span id="liveStockDisplay" class="text-7xl font-black">--</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    const API_BASE = "http://127.0.0.1:8000/api/v1";
+    let pollInterval = null;
+    let turnInterval = null;
+
+    function getAuthHeaders(tenantId) {
+      return {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer mockjwt-${tenantId || 'brand-x'}`
+      };
+    }
+
+    function switchTab(tab) {
+      document.getElementById('viewBuyer').classList.toggle('hidden', tab !== 'buyer');
+      document.getElementById('viewOwner').classList.toggle('hidden', tab !== 'owner');
+      
+      document.getElementById('tabBuyer').className = tab === 'buyer'
+        ? "brutal-box brutal-btn bg-[#A5F3FC] px-6 py-2.5 font-bold text-sm uppercase tracking-wide"
+        : "brutal-box brutal-btn bg-white px-6 py-2.5 font-bold text-sm uppercase tracking-wide";
+        
+      document.getElementById('tabOwner').className = tab === 'owner'
+        ? "brutal-box brutal-btn bg-[#CCFF00] px-6 py-2.5 font-bold text-sm uppercase tracking-wide"
+        : "brutal-box brutal-btn bg-white px-6 py-2.5 font-bold text-sm uppercase tracking-wide";
+    }
+
+    // --- OWNER API LOGIC ---
+    async function adminCreateSale() {
+      const tenant = document.getElementById('adminTenant').value;
+      const product = document.getElementById('adminProduct').value;
+      const stock = parseInt(document.getElementById('adminStock').value);
+
+      try {
+        const res = await fetch(`${API_BASE}/seller/sales`, {
+          method: "POST",
+          headers: getAuthHeaders(tenant),
+          body: JSON.stringify({ product_name: product, stock_count: stock, price_cents: 19900 })
+        });
+        const data = await res.json();
+        if (res.ok) {
+          document.getElementById('adminCreatedResult').classList.remove('hidden');
+          document.getElementById('adminSaleIdSpan').innerText = data.sale_id;
+          document.getElementById('monitorSaleId').value = data.sale_id;
+          document.getElementById('userSaleId').value = data.sale_id; // auto-fill buyer side
+          fetchStockStatus();
+        } else {
+          alert("Error: " + (data.detail || "Failed to create sale"));
         }
-    </script>
+      } catch (err) {
+        alert("Network Error connecting to backend API.");
+      }
+    }
+
+    async function fetchStockStatus() {
+      const saleId = document.getElementById('monitorSaleId').value;
+      const tenant = document.getElementById('adminTenant').value;
+      if (!saleId) return;
+
+      try {
+        const res = await fetch(`${API_BASE}/seller/sales/${saleId}/status`, {
+          headers: getAuthHeaders(tenant)
+        });
+        if (res.ok) {
+          const data = await res.json();
+          document.getElementById('liveStockDisplay').innerText = data.remaining_stock;
+        } else {
+          document.getElementById('liveStockDisplay').innerText = "ERR";
+        }
+      } catch (err) {
+        document.getElementById('liveStockDisplay').innerText = "--";
+      }
+    }
+
+    // --- PUBLIC SHOP LOGIC ---
+    async function userJoinQueue() {
+      const saleId = document.getElementById('userSaleId').value;
+      const email = document.getElementById('userEmail').value;
+      const tenant = document.getElementById('adminTenant').value;
+
+      if (!saleId || !email) {
+        alert("Please fill in Sale ID and Email.");
+        return;
+      }
+
+      try {
+        const res = await fetch(`${API_BASE}/buyer/queue/join?sale_id=${encodeURIComponent(saleId)}&buyer_email=${encodeURIComponent(email)}`, {
+          method: "POST",
+          headers: getAuthHeaders(tenant)
+        });
+        const data = await res.json();
+
+        if (res.ok) {
+          document.getElementById('buyerStepJoin').classList.add('hidden');
+          document.getElementById('buyerStepWaiting').classList.remove('hidden');
+          document.getElementById('displayRank').innerText = data.display_rank || "Joined";
+          startQueuePolling(saleId, email, tenant);
+        } else {
+          alert(`Failed to join queue: ${data.detail || 'Error'}`);
+        }
+      } catch (err) {
+        alert("Network Error connecting to queue.");
+      }
+    }
+
+    function startQueuePolling(saleId, email, tenant) {
+      if (pollInterval) clearInterval(pollInterval);
+
+      pollInterval = setInterval(async () => {
+        try {
+          const res = await fetch(`${API_BASE}/buyer/queue/status?sale_id=${encodeURIComponent(saleId)}&buyer_email=${encodeURIComponent(email)}`, {
+            headers: getAuthHeaders(tenant)
+          });
+          const data = await res.json();
+
+          if (data.is_turn) {
+            clearInterval(pollInterval);
+            document.getElementById('buyerStepWaiting').classList.add('hidden');
+            document.getElementById('buyerStepCheckout').classList.remove('hidden');
+            startTurnTimer(data.seconds_remaining || 90);
+          } else if (data.display_rank) {
+            document.getElementById('displayRank').innerText = data.display_rank;
+          }
+        } catch (err) {
+          console.error("Polling error:", err);
+        }
+      }, 2000);
+    }
+
+    function startTurnTimer(seconds) {
+      let timeLeft = seconds;
+      const timerEl = document.getElementById('turnTimer');
+      
+      if (turnInterval) clearInterval(turnInterval);
+      turnInterval = setInterval(() => {
+        timeLeft--;
+        timerEl.innerText = `${timeLeft}s`;
+        if (timeLeft <= 0) {
+          clearInterval(turnInterval);
+          alert("Turn expired! Back to the end of the line.");
+          location.reload();
+        }
+      }, 1000);
+    }
+
+    async function userCheckout() {
+      const saleId = document.getElementById('userSaleId').value;
+      const email = document.getElementById('userEmail').value;
+      const qty = parseInt(document.getElementById('userQty').value);
+      const tenant = document.getElementById('adminTenant').value;
+      const box = document.getElementById('userResponseBox');
+
+      box.classList.remove('hidden');
+      box.innerText = "Processing atomic reservation...";
+      box.className = "bg-white brutal-box p-6 text-center font-bold text-lg mt-6 max-w-2xl mx-auto";
+
+      try {
+        const res = await fetch(`${API_BASE}/buyer/reserve`, {
+          method: "POST",
+          headers: getAuthHeaders(tenant),
+          body: JSON.stringify({ sale_id: saleId, buyer_email: email, requested_quantity: qty })
+        });
+        const data = await res.json();
+
+        if (res.ok) {
+          clearInterval(turnInterval);
+          box.innerText = `SUCCESS! Order ID: ${data.reservation_id}`;
+          box.classList.add("bg-[#6EE7B7]");
+          fetchStockStatus();
+        } else {
+          box.innerText = `REJECTED: ${data.detail || 'Sold out'}`;
+          box.classList.add("bg-red-400", "text-white");
+        }
+      } catch (err) {
+        box.innerText = "Network Error: Could not reach API server.";
+        box.classList.add("bg-red-400", "text-white");
+      }
+    }
+  </script>
 </body>
 </html>
