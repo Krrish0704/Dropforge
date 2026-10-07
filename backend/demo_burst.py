@@ -3,7 +3,7 @@ import httpx
 
 async def main():
     # Use localhost:8000 since we'll run this from outside or mapped ports
-    async with httpx.AsyncClient(base_url="http://127.0.0.1:8000", timeout=10.0) as client:
+    async with httpx.AsyncClient(base_url="http://127.0.0.1:8000", timeout=45.0) as client:
         headers = {"Authorization": "Bearer mockjwt-brand-x"}
         
         # 1. Create Sale (10 items)

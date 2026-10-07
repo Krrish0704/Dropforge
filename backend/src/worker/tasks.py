@@ -37,27 +37,28 @@ class ActionRequiredError(Exception):
     pass
 
 # --- 1. CELERY BEAT: DISTRIBUTED QUEUE REAPER ---
-@shared_task(name="advance_expired_turns")
-def advance_expired_turns(tenant_id: str, sale_id: str):
-    """
-    Runs every 2 seconds via Celery Beat[cite: 2].
-    If the active turn has expired (or doesn't exist), pop the next user from the ZSET queue[cite: 2].
-    """
-    turn_key = f"turn:{tenant_id}:{sale_id}"
-    queue_key = f"queue:{tenant_id}:{sale_id}"
-    
-    current_turn = sync_redis.get(turn_key)
-    if current_turn:
-        return 
-        
-    next_user = sync_redis.zpopmin(queue_key, 1)
-    if not next_user:
-        return 
-        
-    buyer_email = next_user[0][0]
-    sync_redis.setex(turn_key, 90, buyer_email)
-    print(f"Turn advanced for {sale_id}. {buyer_email} now has 90s to choose quantity.")
-
+@shared_task(name="advance_all_expired_turns")
+def advance_all_expired_turns():
+    """Scans every tenant's every active sale queue and advances turns that are free."""
+    cursor = 0
+    while True:
+        cursor, keys = sync_redis.scan(cursor=cursor, match="queue:*:*", count=100)
+        for queue_key in keys:
+            parts = queue_key.split(":")
+            if len(parts) != 3:
+                continue
+            _, tenant_id, sale_id = parts
+            turn_key = f"turn:{tenant_id}:{sale_id}"
+            if sync_redis.get(turn_key):
+                continue
+            next_user = sync_redis.zpopmin(queue_key, 1)
+            if not next_user:
+                continue
+            buyer_email = next_user[0][0]
+            sync_redis.setex(turn_key, 90, buyer_email)
+            print(f"Turn advanced for {sale_id}: {buyer_email} has 90s")
+        if cursor == 0:
+            break
 # --- 2. SEMAPHORE DISPATCHER: CROSS-TENANT FAIRNESS ---
 def dispatch_payment_task(tenant_id: str, payload: dict):
     """
@@ -104,8 +105,14 @@ def process_payment(self, payload: dict):
             return {"status": "failed", "reservation_id": res_id}
 
         # Persist finalized order to PostgreSQL with RLS context[cite: 2]
+        # Persist finalized order to PostgreSQL with RLS context[cite: 2]
         with SyncSessionLocal() as session:
-            session.execute(text("SET LOCAL app.current_tenant = :tenant"), {"tenant": tenant_id})
+            # Enforce Row-Level Security for this specific transaction using set_config[cite: 11]
+            session.execute(
+                text("SELECT set_config('app.current_tenant', :tenant, true)"), 
+                {"tenant": tenant_id}
+            )
+            
             session.execute(text("""
                 INSERT INTO orders (tenant_id, sale_id, buyer_email, reservation_id, status)
                 VALUES (:tenant_id, :sale_id, :buyer_email, :reservation_id, 'completed')

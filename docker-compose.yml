@@ -1,15 +1,4 @@
 services:
-  db:
-    image: postgres:15-alpine
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: password
-      POSTGRES_DB: dropforge
-    ports:
-      - "5432:5432"
-    volumes:
-      - ./backend/init.sql:/docker-entrypoint-initdb.d/init.sql
-
   redis:
     image: redis:7-alpine
     ports:
@@ -20,11 +9,10 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - REDIS_URL=redis://redis:6379
-      - DATABASE_URL=postgresql+asyncpg://postgres:password@db:5432/dropforge
+      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql+asyncpg://postgres:Thuglife5154%23@database-1.cluster-cha8g0qccmcn.eu-north-1.rds.amazonaws.com:5432/postgres
     depends_on:
       - redis
-      - db
 
   frontend:
     image: python:3.11-slim
@@ -41,10 +29,9 @@ services:
     command: celery -A src.worker.celery_app worker -Q default --concurrency=8 --loglevel=info
     environment:
       - REDIS_URL=redis://redis:6379/0
-      - DATABASE_URL=postgresql+asyncpg://postgres:password@db:5432/dropforge
+      - DATABASE_URL=postgresql+asyncpg://postgres:Thuglife5154%23@database-1.cluster-cha8g0qccmcn.eu-north-1.rds.amazonaws.com:5432/postgres
     depends_on:
       - redis
-      - db
 
   worker-priority:
     build: ./backend
@@ -52,10 +39,9 @@ services:
     command: celery -A src.worker.celery_app worker -Q priority --concurrency=2 --loglevel=info
     environment:
       - REDIS_URL=redis://redis:6379/0
-      - DATABASE_URL=postgresql+asyncpg://postgres:password@db:5432/dropforge
+      - DATABASE_URL=postgresql+asyncpg://postgres:Thuglife5154%23@database-1.cluster-cha8g0qccmcn.eu-north-1.rds.amazonaws.com:5432/postgres
     depends_on:
       - redis
-      - db
 
   beat:
     build: ./backend
