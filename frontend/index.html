@@ -180,10 +180,14 @@
       const stock = parseInt(document.getElementById('adminStock').value);
 
       try {
-        const res = await fetch(`${API_URL}/seller/sales`, {
-          method: "POST",
-          headers: getAuthHeaders(tenant),
-          body: JSON.stringify({ product_name: product, stock_count: stock, price_cents: 19900 })
+        const res = await fetch(`${API_BASE}/buyer/reserve`, {
+            method: "POST",
+            headers: getAuthHeaders(tenant),
+            body: JSON.stringify({ 
+                sale_id: saleId, 
+                buyer_email: email, 
+                requested_quantity: qty || 1 
+            })
         });
         const data = await res.json();
         if (res.ok) {

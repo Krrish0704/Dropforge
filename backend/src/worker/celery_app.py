@@ -19,15 +19,17 @@ celery_app.conf.update(
     result_serializer="json",
     timezone="UTC",
     enable_utc=True,
-    # Route new reservations to the default queue automatically
+    task_default_queue="default",  # Routes unrouted tasks to 'default'
     task_routes={
         "process_payment": {"queue": "default"},
+        "advance_all_expired_turns": {"queue": "default"},
     }
 )
 
 celery_app.conf.beat_schedule = {
     "reap-expired-turns": {
         "task": "advance_all_expired_turns",
-        "schedule": 2.0, 
+        "schedule": 2.0,
+        "options": {"queue": "default"},  # Explicitly targets worker-default
     },
 }

@@ -19,10 +19,8 @@ async def get_db():
 async def set_tenant_context(session: AsyncSession, tenant_id: str):
     """
     Enforces PostgreSQL Row-Level Security (RLS) for the current transaction.
-    Every query on this session will now be restricted to this tenant_id.
     """
-    # Changed from SET LOCAL to SELECT set_config()
     await session.execute(
-        text("SELECT set_config('app.current_tenant', :tenant_id, true)"), 
+        text("SELECT set_config('app.current_tenant', :tenant_id, true)"),
         {"tenant_id": tenant_id}
     )
