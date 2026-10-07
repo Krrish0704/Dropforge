@@ -89,9 +89,40 @@ async def create_sale(
     meta_key = f"sale_meta:{tenant_id}:{sale_id}"
     
     await redis_client.set(inventory_key, payload.stock_count)
-    await redis_client.hset(meta_key, mapping={"sale_id": sale_id, "stock": payload.stock_count, "tenant": tenant_id})
+    
+    # ADDED: product_name stored in Redis so the public browser can display it
+    await redis_client.hset(meta_key, mapping={
+        "sale_id": sale_id, 
+        "stock": payload.stock_count, 
+        "tenant": tenant_id,
+        "product_name": payload.product_name
+    })
     
     return {"status": "created", "sale_id": sale_id, "tenant_id": tenant_id, "stock_count": payload.stock_count}
+
+# ADDED: Public endpoint for cross-tenant browsing
+@router.get("/public/sales")
+async def list_all_public_sales():
+    """No auth — buyers browse all live sales across every tenant before picking one."""
+    sales = []
+    cursor = 0
+    while True:
+        cursor, keys = await redis_client.scan(cursor=cursor, match="sale_meta:*", count=100)
+        for key in keys:
+            meta = await redis_client.hgetall(key)
+            if not meta:
+                continue
+            tenant_id, sale_id = meta.get("tenant"), meta.get("sale_id")
+            remaining = await redis_client.get(f"inventory:{tenant_id}:{sale_id}")
+            sales.append({
+                "tenant_id": tenant_id,
+                "sale_id": sale_id,
+                "product_name": meta.get("product_name", "Unnamed Drop"),
+                "remaining_stock": int(remaining) if remaining is not None else 0,
+            })
+        if cursor == 0:
+            break
+    return {"sales": sales}
 
 @router.post("/buyer/queue/join")
 async def join_queue(sale_id: str, buyer_email: str, tenant_id: str = Depends(get_current_tenant)):
@@ -168,3 +199,45 @@ async def get_sale_status(sale_id: str, tenant_id: str = Depends(get_current_ten
     if stock is None:
         raise HTTPException(status_code=404, detail="Access denied or sale not found")
     return {"tenant_id": tenant_id, "remaining_stock": int(stock)}
+
+@router.get("/buyer/queue/status")
+async def queue_status(sale_id: str, buyer_email: str, tenant_id: str = Depends(get_current_tenant)):
+    queue_key = f"queue:{tenant_id}:{sale_id}"
+    turn_key = f"turn:{tenant_id}:{sale_id}"
+
+    active_buyer = await redis_client.get(turn_key)
+    if active_buyer == buyer_email:
+        ttl = await redis_client.ttl(turn_key)
+        return {"is_turn": True, "seconds_remaining": max(ttl, 0)}
+
+    rank = await redis_client.zrank(queue_key, buyer_email)
+    if rank is None:
+        return {"is_turn": False, "display_rank": "Not in queue"}
+
+    rank += 1
+    if rank < 10:
+        display_rank = str(rank)
+    else:
+        bucket = 10 ** math.floor(math.log10(rank))
+        lower = (rank // bucket) * bucket
+        display_rank = f"{lower}-{lower + bucket}"
+
+    return {"is_turn": False, "display_rank": display_rank, "exact_rank": rank}
+
+@router.get("/seller/sales")
+async def list_sales(tenant_id: str = Depends(get_current_tenant), db: AsyncSession = Depends(get_db)):
+    await set_tenant_context(db, tenant_id)
+    result = await db.execute(
+        text("SELECT id, product_name, stock_count FROM sales WHERE tenant_id = :t ORDER BY created_at DESC"),
+        {"t": tenant_id}
+    )
+    sales = []
+    for row in result.fetchall():
+        stock = await redis_client.get(f"inventory:{tenant_id}:{row.id}")
+        sales.append({
+            "sale_id": str(row.id),
+            "product_name": row.product_name,
+            "original_stock": row.stock_count,
+            "remaining_stock": int(stock) if stock is not None else 0
+        })
+    return {"sales": sales}
